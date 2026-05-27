@@ -90,7 +90,7 @@ async function processReceipt(userId, imageMessageId, description) {
 
     // 4. Tell the user it worked
     await push(userId,
-      `✅ Saved!\n\nDate: ${data.date}\nTotal: ${data.total} ${data.currency}\nFor: ${description}`
+      `✅ Saved!\n\nDescription: ${description}\nDate: ${data.date}\nTotal: ${data.total}`
     );
 
   } catch (err) {
@@ -111,14 +111,12 @@ async function callClaude(imageBase64, mimeType, description) {
       content: [
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
-          `Analyze this Thai receipt or bank slip image. The user says it is for: "${description}".\n\n` +
-          `Extract these fields carefully:\n` +
-          `- date: the transaction date only (convert Buddhist Era to Gregorian, e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
-          `- total: the transaction amount as a number only (e.g. 45.00), NOT a date\n` +
-          `- currency: the currency code (usually THB)\n` +
-          `- items: one sentence describing the transaction type (e.g. "ATM withdrawal", "bank transfer", "grocery purchase")\n\n` +
+          `Analyze this Thai receipt or bank slip image.\n\n` +
+          `Find ONLY these 2 things:\n` +
+          `- date: the transaction date, convert Buddhist Era to Gregorian (e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
+          `- total: the final total amount as a number only (e.g. 45.00)\n\n` +
           `Reply ONLY with valid JSON, no other text:\n` +
-          `{"date":"YYYY-MM-DD","total":0.00,"currency":"THB","items":"..."}`
+          `{"date":"YYYY-MM-DD","total":0.00}`
         }
       ]
     }]
@@ -127,7 +125,7 @@ async function callClaude(imageBase64, mimeType, description) {
   const text  = msg.content[0].text;
   const match = text.match(/\{[\s\S]*\}/);
   if (match) return JSON.parse(match[0]);
-  return { store: 'Unknown', date: today(), total: 0, currency: 'THB', items: text };
+  return { date: today(), total: 0 };
 }
 
 // ── Google Sheets ─────────────────────────────────────────────
@@ -138,16 +136,13 @@ async function saveToSheet(userId, description, data) {
   if (!check.data.values) {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
-      requestBody: { values: [['Timestamp','User ID','Description','Date','Total','Currency','Items']] }
+      requestBody: { values: [['Description','Date','Total']] }
     });
   }
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
-    requestBody: { values: [[
-      new Date().toISOString(), userId, description,
-      data.date || '', data.total || 0, data.currency || 'THB', data.items || ''
-    ]] }
+    requestBody: { values: [[description, data.date || '', data.total || 0]] }
   });
 }
 
