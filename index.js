@@ -90,7 +90,7 @@ async function processReceipt(userId, imageMessageId, description) {
 
     // 4. Tell the user it worked
     await push(userId,
-      `✅ Saved!\n\nStore: ${data.store}\nDate: ${data.date}\nTotal: ${data.total} ${data.currency}\nFor: ${description}`
+      `✅ Saved!\n\nDate: ${data.date}\nTotal: ${data.total} ${data.currency}\nFor: ${description}`
     );
 
   } catch (err) {
@@ -133,7 +133,7 @@ async function saveToSheet(userId, description, data) {
   if (!check.data.values) {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
-      requestBody: { values: [['Timestamp','User ID','Description','Store','Date','Total','Currency','Items']] }
+      requestBody: { values: [['Timestamp','User ID','Description','Date','Total','Currency','Items']] }
     });
   }
 
@@ -141,7 +141,7 @@ async function saveToSheet(userId, description, data) {
     spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
     requestBody: { values: [[
       new Date().toISOString(), userId, description,
-      data.store || '', data.date || '', data.total || 0, data.currency || 'THB', data.items || ''
+      data.date || '', data.total || 0, data.currency || 'THB', data.items || ''
     ]] }
   });
 }
