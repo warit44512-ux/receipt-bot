@@ -1,0 +1,11 @@
+[33m3311720[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m convert thai date in javascript instead of claude
+[33m08434e4[m fix thai month conversion
+[33m449dab7[m fix recipient detection
+[33m7400896[m fix recipient using thai labels
+[33mf53e12c[m fix recipient field
+[33mb008eb8[m add time and recipient columns
+[33mc6e0443[m simplify to 3 columns only
+[33mfe502db[m fix thai receipt parsing
+[33mfe2c4ee[m remove store from claude prompt
+[33mfd3c076[m remove store column
+[33m2237ba0[m initial bot

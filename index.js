@@ -6,16 +6,16 @@ const { google } = require('googleapis');
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
-const LINE_TOKEN    = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const CLAUDE_KEY    = process.env.CLAUDE_API_KEY;
-const SHEET_ID      = process.env.GOOGLE_SHEET_ID;
+const PORT            = process.env.PORT || 3000;
+const LINE_TOKEN      = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const CLAUDE_KEY      = process.env.CLAUDE_API_KEY;
+const MASTER_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 
-// Google Sheets client via service account
+// Google Sheets client
 let sheets;
 try {
   const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-  const auth = new google.auth.GoogleAuth({
+  const auth  = new google.auth.GoogleAuth({
     credentials: creds,
     scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
@@ -24,16 +24,35 @@ try {
   console.error('Google Sheets init failed:', e.message);
 }
 
-// Temporary in-memory state (survives between messages, resets on restart)
 const userStates = {};
 
-// ── Health check ────────────────────────────────────────────
+const CATEGORY_EMOJIS = {
+  Food: '🍜', Transport: '🚕', Shopping: '🛍️',
+  Bills: '💡', Entertainment: '🎬', Health: '🏥', Other: '📦'
+};
+
+// ── Health check ─────────────────────────────────────────────
 app.get('/', (req, res) => res.send('Receipt Tracker Bot is running!'));
 
-// ── LINE webhook ─────────────────────────────────────────────
-app.post('/webhook', async (req, res) => {
-  res.sendStatus(200); // respond immediately so LINE doesn't retry
+// ── Weekly trigger endpoint (called by external cron) ─────────
+app.get('/weekly-trigger', async (req, res) => {
+  res.send('Weekly trigger fired');
+  try {
+    const userIds = await getAllUserIds();
+    for (const userId of userIds) {
+      const sheetId = await getUserSheetId(userId);
+      if (!sheetId) continue;
+      const summary = await generateSummary(sheetId, 'week');
+      await push(userId, summary);
+    }
+  } catch (err) {
+    console.error('Weekly trigger error:', err.message);
+  }
+});
 
+// ── LINE webhook ──────────────────────────────────────────────
+app.post('/webhook', async (req, res) => {
+  res.sendStatus(200);
   const events = req.body.events || [];
   for (const event of events) {
     try { await handleEvent(event); }
@@ -55,26 +74,111 @@ async function handleEvent(event) {
   }
 
   if (event.message.type === 'text') {
-    const state = userStates[userId];
+    const text = event.message.text.trim();
 
+    // Register command
+    if (text.toLowerCase().startsWith('register ')) {
+      const sheetId = text.split(' ')[1]?.trim();
+      if (!sheetId) { await reply(replyToken, '❌ Please send: register YOUR_SHEET_ID'); return; }
+      await registerUser(userId, sheetId, replyToken);
+      return;
+    }
+
+    // Summary command
+    if (text.toLowerCase() === 'summary' || text === 'สรุป') {
+      const sheetId = await getUserSheetId(userId);
+      if (!sheetId) { await reply(replyToken, '❌ Not registered yet. Type: register YOUR_SHEET_ID'); return; }
+      await reply(replyToken, '⏳ Generating summary...');
+      const summary = await generateSummary(sheetId, 'month');
+      await push(userId, summary);
+      return;
+    }
+
+    // Description after photo
+    const state = userStates[userId];
     if (state && state.imageMessageId) {
-      const description    = event.message.text;
+      const description    = text;
       const imageMessageId = state.imageMessageId;
       delete userStates[userId];
-
       await reply(replyToken, '⏳ Reading your receipt...');
       await processReceipt(userId, imageMessageId, description);
       return;
     }
 
-    await reply(replyToken, '📸 Send me a receipt photo first!');
+    await reply(replyToken, '📸 Send me a receipt photo!\n\nCommands:\n• register SHEET_ID\n• summary / สรุป');
   }
+}
+
+// ── Register user ─────────────────────────────────────────────
+async function registerUser(userId, sheetId, replyToken) {
+  try {
+    const spreadsheet    = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID });
+    const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
+
+    if (!existingSheets.includes('users')) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'users' } } }] }
+      });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: MASTER_SHEET_ID, range: 'users!A1', valueInputOption: 'RAW',
+        requestBody: { values: [['user_id', 'sheet_id']] }
+      });
+    }
+
+    const res  = await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: 'users!A:B' });
+    const rows = res.data.values || [];
+    let found  = false;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i][0] === userId) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: MASTER_SHEET_ID, range: `users!B${i + 1}`,
+          valueInputOption: 'RAW', requestBody: { values: [[sheetId]] }
+        });
+        found = true; break;
+      }
+    }
+    if (!found) {
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: MASTER_SHEET_ID, range: 'users!A1', valueInputOption: 'RAW',
+        requestBody: { values: [[userId, sheetId]] }
+      });
+    }
+    await reply(replyToken, '✅ Registered! Send a receipt photo to get started!');
+  } catch (err) {
+    console.error('registerUser error:', err.message);
+    await reply(replyToken, '❌ Registration failed. Make sure you shared your sheet with:\nreceipt-bot@line-stupid-receipt.iam.gserviceaccount.com');
+  }
+}
+
+// ── Get user sheet ID ─────────────────────────────────────────
+async function getUserSheetId(userId) {
+  try {
+    const res  = await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: 'users!A:B' });
+    const rows = res.data.values || [];
+    for (const row of rows) { if (row[0] === userId) return row[1]; }
+  } catch (e) {}
+  return null;
+}
+
+// ── Get all user IDs (for weekly trigger) ─────────────────────
+async function getAllUserIds() {
+  try {
+    const res  = await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: 'users!A:A' });
+    const rows = res.data.values || [];
+    return rows.slice(1).map(r => r[0]).filter(Boolean);
+  } catch (e) { return []; }
 }
 
 // ── Process receipt ───────────────────────────────────────────
 async function processReceipt(userId, imageMessageId, description) {
   try {
-    // 1. Fetch image from LINE
+    const userSheetId = await getUserSheetId(userId);
+    if (!userSheetId) {
+      await push(userId, '❌ Not registered!\n\nType: register YOUR_SHEET_ID');
+      return;
+    }
+
     const imgRes = await axios.get(
       `https://api-data.line.me/v2/bot/message/${imageMessageId}/content`,
       { headers: { Authorization: `Bearer ${LINE_TOKEN}` }, responseType: 'arraybuffer' }
@@ -82,17 +186,13 @@ async function processReceipt(userId, imageMessageId, description) {
     const imageBase64 = Buffer.from(imgRes.data).toString('base64');
     const mimeType    = imgRes.headers['content-type'] || 'image/jpeg';
 
-    // 2. Ask Claude to read the receipt
     const data = await callClaude(imageBase64, mimeType, description);
+    await saveToSheet(userSheetId, description, data);
 
-    // 3. Save to Google Sheets
-    await saveToSheet(userId, description, data);
-
-    // 4. Tell the user it worked
+    const emoji = CATEGORY_EMOJIS[data.category] || '📦';
     await push(userId,
-      `✅ Saved!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ${data.total}\nRecipient: ${data.recipient || '-'}`
+      `✅ Saved!\n\n${emoji} ${data.category}\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${data.total}\nRecipient: ${data.recipient || '-'}`
     );
-
   } catch (err) {
     console.error('processReceipt error:', err.message);
     await push(userId, '❌ Something went wrong. Please try again.');
@@ -102,7 +202,6 @@ async function processReceipt(userId, imageMessageId, description) {
 // ── Claude Vision ─────────────────────────────────────────────
 async function callClaude(imageBase64, mimeType, description) {
   const client = new Anthropic({ apiKey: CLAUDE_KEY });
-
   const msg = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 512,
@@ -111,14 +210,15 @@ async function callClaude(imageBase64, mimeType, description) {
       content: [
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
-          `Analyze this Thai receipt or bank slip image.\n\n` +
-          `Find ONLY these 4 things:\n` +
-          `- date: the raw date text exactly as it appears on the receipt (e.g. "27 พ.ค. 2569" or "2026-05-27"), do not convert anything\n` +
-          `- time: the transaction time in HH:MM format (24hr), or "" if not visible\n` +
-          `- total: the final total amount as a number only (e.g. 45.00)\n` +
-          `- recipient: the merchant, service, or company that received the payment. This is usually a company/brand name (e.g. "2c2p(Thailand)", "Grab", "Shopee", "Netflix"). It is NOT a Thai person name (นาย/นาง/นางสาว), NOT a bank name (กรุงไทย/กสิกร/SCB), and NOT a number. If you see a company or brand name on the slip, that is the recipient. Return "" if none found.\n\n` +
-          `Reply ONLY with valid JSON, no other text:\n` +
-          `{"date":"YYYY-MM-DD","time":"HH:MM","total":0.00,"recipient":"..."}`
+          `Analyze this Thai receipt or bank slip. User says it is for: "${description}".\n\n` +
+          `Extract these 5 things:\n` +
+          `- date: raw date text as it appears (e.g. "27 พ.ค. 2569"), do not convert\n` +
+          `- time: transaction time HH:MM (24hr), or ""\n` +
+          `- total: final amount as number only\n` +
+          `- recipient: merchant/company name that received money (NOT bank name, NOT Thai person name). Return "" if none.\n` +
+          `- category: ONE of these only: Food, Transport, Shopping, Bills, Entertainment, Health, Other\n\n` +
+          `Reply ONLY with valid JSON:\n` +
+          `{"date":"...","time":"...","total":0.00,"recipient":"...","category":"..."}`
         }
       ]
     }]
@@ -131,20 +231,17 @@ async function callClaude(imageBase64, mimeType, description) {
     parsed.date = convertThaiDate(parsed.date);
     return parsed;
   }
-  return { date: today(), time: '', total: 0, recipient: '' };
+  return { date: today(), time: '', total: 0, recipient: '', category: 'Other' };
 }
 
 function convertThaiDate(raw) {
   if (!raw) return today();
-  // Already in YYYY-MM-DD format
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-
   const months = {
     'ม.ค.': '01', 'ก.พ.': '02', 'มี.ค.': '03', 'เม.ย.': '04',
     'พ.ค.': '05', 'มิ.ย.': '06', 'ก.ค.': '07', 'ส.ค.': '08',
     'ก.ย.': '09', 'ต.ค.': '10', 'พ.ย.': '11', 'ธ.ค.': '12'
   };
-
   for (const [thaiMonth, num] of Object.entries(months)) {
     if (raw.includes(thaiMonth)) {
       const parts = raw.replace(thaiMonth, '').trim().split(/\s+/);
@@ -157,34 +254,93 @@ function convertThaiDate(raw) {
 }
 
 // ── Google Sheets ─────────────────────────────────────────────
-async function saveToSheet(userId, description, data) {
+async function saveToSheet(sheetId, description, data) {
   if (!sheets) throw new Error('Google Sheets not configured');
-
-  // Get month tab name e.g. "2026-05"
   const month = (data.date || today()).substring(0, 7);
 
-  // Get existing sheets
-  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const spreadsheet    = await sheets.spreadsheets.get({ spreadsheetId: sheetId });
   const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
 
-  // Create the tab if it doesn't exist
   if (!existingSheets.includes(month)) {
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SHEET_ID,
+      spreadsheetId: sheetId,
       requestBody: { requests: [{ addSheet: { properties: { title: month } } }] }
     });
-    // Add header row to new tab
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID, range: `${month}!A1`, valueInputOption: 'RAW',
-      requestBody: { values: [['Description', 'Date', 'Time', 'Total', 'Recipient']] }
+      spreadsheetId: sheetId, range: `${month}!A1`, valueInputOption: 'RAW',
+      requestBody: { values: [['Description', 'Date', 'Time', 'Total', 'Category', 'Recipient']] }
     });
   }
 
-  // Append data to the month tab
   await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID, range: `${month}!A1`, valueInputOption: 'RAW',
-    requestBody: { values: [[description, data.date || '', data.time || '', data.total || 0, data.recipient || '']] }
+    spreadsheetId: sheetId, range: `${month}!A1`, valueInputOption: 'RAW',
+    requestBody: { values: [[
+      description, data.date || '', data.time || '',
+      data.total || 0, data.category || 'Other', data.recipient || ''
+    ]] }
   });
+}
+
+// ── Generate summary ──────────────────────────────────────────
+async function generateSummary(sheetId, period = 'month') {
+  try {
+    const month = today().substring(0, 7);
+    const res   = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range: `${month}!A:F` });
+    const rows  = res.data.values || [];
+
+    if (rows.length <= 1) return `📊 No receipts found for ${month}.`;
+
+    const now       = new Date();
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const totals    = {};
+    let grandTotal  = 0;
+    let count       = 0;
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row[1]) continue;
+
+      if (period === 'week') {
+        const rowDate = new Date(row[1]);
+        if (rowDate < weekStart) continue;
+      }
+
+      const amount   = parseFloat(row[3]) || 0;
+      const category = row[4] || 'Other';
+      totals[category] = (totals[category] || 0) + amount;
+      grandTotal += amount;
+      count++;
+    }
+
+    if (count === 0) return period === 'week'
+      ? '📊 No receipts this week yet.'
+      : `📊 No receipts found for ${month}.`;
+
+    const periodLabel = period === 'week'
+      ? `This week (${weekStart.toLocaleDateString('en-GB')})`
+      : month;
+
+    let msg = `📊 Spending Summary\n${periodLabel}\n━━━━━━━━━━━━━━━━\n`;
+
+    const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+    for (const [cat, amount] of sorted) {
+      const emoji = CATEGORY_EMOJIS[cat] || '📦';
+      const pct   = ((amount / grandTotal) * 100).toFixed(0);
+      msg += `${emoji} ${cat}: ฿${amount.toFixed(2)} (${pct}%)\n`;
+    }
+
+    msg += `━━━━━━━━━━━━━━━━\n💰 Total: ฿${grandTotal.toFixed(2)} (${count} receipts)`;
+
+    if (sorted.length > 0) {
+      msg += `\n💡 ${sorted[0][0]} is your biggest expense`;
+    }
+
+    return msg;
+  } catch (err) {
+    return '📊 Could not generate summary. Make sure you have receipts saved.';
+  }
 }
 
 // ── LINE helpers ──────────────────────────────────────────────
