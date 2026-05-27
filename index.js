@@ -112,8 +112,8 @@ async function callClaude(imageBase64, mimeType, description) {
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
           `Analyze this receipt. The user says it is for: "${description}".\n` +
-          `Extract: store name, date, total amount, currency, brief item summary.\n` +
-          `Reply ONLY with JSON: {"store":"...","date":"YYYY-MM-DD","total":0.00,"currency":"THB","items":"..."}`
+          `Extract: date, total amount, currency, and a brief item summary (do NOT include the store name anywhere).\n` +
+          `Reply ONLY with JSON: {"date":"YYYY-MM-DD","total":0.00,"currency":"THB","items":"..."}`
         }
       ]
     }]
