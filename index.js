@@ -26,10 +26,6 @@ try {
 
 const userStates = {};
 
-const CATEGORY_EMOJIS = {
-  Food: '🍜', Transport: '🚕', Shopping: '🛍️',
-  Bills: '💡', Entertainment: '🎬', Health: '🏥', Other: '📦'
-};
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/', (req, res) => res.send('Receipt Tracker Bot is running!'));
@@ -81,6 +77,34 @@ async function handleEvent(event) {
       const sheetId = text.split(' ')[1]?.trim();
       if (!sheetId) { await reply(replyToken, '❌ Please send: register YOUR_SHEET_ID'); return; }
       await registerUser(userId, sheetId, replyToken);
+      return;
+    }
+
+    // Manual add command: add AMOUNT DESCRIPTION
+    // e.g. "add 500 TrueMoney top-up"
+    if (text.toLowerCase().startsWith('add ')) {
+      const parts = text.split(' ');
+      const amount = parseFloat(parts[1]);
+      const description = parts.slice(2).join(' ');
+
+      if (isNaN(amount) || !description) {
+        await reply(replyToken, '❌ Wrong format. Use:\nadd AMOUNT DESCRIPTION\n\nExample:\nadd 500 TrueMoney top-up');
+        return;
+      }
+
+      const userSheetId = await getUserSheetId(userId);
+      if (!userSheetId) { await reply(replyToken, '❌ Not registered. Type: register YOUR_SHEET_ID'); return; }
+
+      const now = new Date();
+      const data = {
+        date: now.toISOString().split('T')[0],
+        time: now.toTimeString().substring(0, 5),
+        total: amount,
+        recipient: ''
+      };
+
+      await saveToSheet(userSheetId, description, data);
+      await reply(replyToken, `✅ Added manually!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${amount}`);
       return;
     }
 
@@ -189,9 +213,8 @@ async function processReceipt(userId, imageMessageId, description) {
     const data = await callClaude(imageBase64, mimeType, description);
     await saveToSheet(userSheetId, description, data);
 
-    const emoji = CATEGORY_EMOJIS[data.category] || '📦';
     await push(userId,
-      `✅ Saved!\n\n${emoji} ${data.category}\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${data.total}\nRecipient: ${data.recipient || '-'}`
+      `✅ Saved!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${data.total}\nRecipient: ${data.recipient || '-'}`
     );
   } catch (err) {
     console.error('processReceipt error:', err.message);
@@ -211,14 +234,13 @@ async function callClaude(imageBase64, mimeType, description) {
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
           `Analyze this Thai receipt or bank slip. User says it is for: "${description}".\n\n` +
-          `Extract these 5 things:\n` +
+          `Extract these 4 things:\n` +
           `- date: raw date text as it appears (e.g. "27 พ.ค. 2569"), do not convert\n` +
           `- time: transaction time HH:MM (24hr), or ""\n` +
           `- total: final amount as number only\n` +
-          `- recipient: merchant/company name that received money (NOT bank name, NOT Thai person name). Return "" if none.\n` +
-          `- category: ONE of these only: Food, Transport, Shopping, Bills, Entertainment, Health, Other\n\n` +
+          `- recipient: merchant/company name that received money (NOT bank name, NOT Thai person name). Return "" if none.\n\n` +
           `Reply ONLY with valid JSON:\n` +
-          `{"date":"...","time":"...","total":0.00,"recipient":"...","category":"..."}`
+          `{"date":"...","time":"...","total":0.00,"recipient":"..."}`
         }
       ]
     }]
@@ -231,7 +253,7 @@ async function callClaude(imageBase64, mimeType, description) {
     parsed.date = convertThaiDate(parsed.date);
     return parsed;
   }
-  return { date: today(), time: '', total: 0, recipient: '', category: 'Other' };
+  return { date: today(), time: '', total: 0, recipient: '' };
 }
 
 function convertThaiDate(raw) {
@@ -268,7 +290,7 @@ async function saveToSheet(sheetId, description, data) {
     });
     await sheets.spreadsheets.values.append({
       spreadsheetId: sheetId, range: `${month}!A1`, valueInputOption: 'RAW',
-      requestBody: { values: [['Description', 'Date', 'Time', 'Total', 'Category', 'Recipient']] }
+      requestBody: { values: [['Description', 'Date', 'Time', 'Total', 'Recipient']] }
     });
   }
 
@@ -276,7 +298,7 @@ async function saveToSheet(sheetId, description, data) {
     spreadsheetId: sheetId, range: `${month}!A1`, valueInputOption: 'RAW',
     requestBody: { values: [[
       description, data.date || '', data.time || '',
-      data.total || 0, data.category || 'Other', data.recipient || ''
+      data.total || 0, data.recipient || ''
     ]] }
   });
 }
@@ -294,9 +316,9 @@ async function generateSummary(sheetId, period = 'month') {
     const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
 
-    const totals    = {};
-    let grandTotal  = 0;
-    let count       = 0;
+    let grandTotal = 0;
+    let count      = 0;
+    let rows_msg   = '';
 
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -307,11 +329,11 @@ async function generateSummary(sheetId, period = 'month') {
         if (rowDate < weekStart) continue;
       }
 
-      const amount   = parseFloat(row[3]) || 0;
-      const category = row[4] || 'Other';
-      totals[category] = (totals[category] || 0) + amount;
+      const amount      = parseFloat(row[3]) || 0;
+      const description = row[0] || '-';
       grandTotal += amount;
       count++;
+      rows_msg += `• ${description}: ฿${amount.toFixed(2)}\n`;
     }
 
     if (count === 0) return period === 'week'
@@ -322,20 +344,7 @@ async function generateSummary(sheetId, period = 'month') {
       ? `This week (${weekStart.toLocaleDateString('en-GB')})`
       : month;
 
-    let msg = `📊 Spending Summary\n${periodLabel}\n━━━━━━━━━━━━━━━━\n`;
-
-    const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
-    for (const [cat, amount] of sorted) {
-      const emoji = CATEGORY_EMOJIS[cat] || '📦';
-      const pct   = ((amount / grandTotal) * 100).toFixed(0);
-      msg += `${emoji} ${cat}: ฿${amount.toFixed(2)} (${pct}%)\n`;
-    }
-
-    msg += `━━━━━━━━━━━━━━━━\n💰 Total: ฿${grandTotal.toFixed(2)} (${count} receipts)`;
-
-    if (sorted.length > 0) {
-      msg += `\n💡 ${sorted[0][0]} is your biggest expense`;
-    }
+    const msg = `📊 Spending Summary\n${periodLabel}\n━━━━━━━━━━━━━━━━\n${rows_msg}━━━━━━━━━━━━━━━━\n💰 Total: ฿${grandTotal.toFixed(2)} (${count} receipts)`;
 
     return msg;
   } catch (err) {
