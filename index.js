@@ -116,7 +116,7 @@ async function callClaude(imageBase64, mimeType, description) {
           `- date: the transaction date, convert Buddhist Era to Gregorian (e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
           `- time: the transaction time in HH:MM format (24hr), or "" if not visible\n` +
           `- total: the final total amount as a number only (e.g. 45.00)\n` +
-          `- recipient: look for the label "ผู้รับเงิน", "ปลายทาง", "โอนเงินไปยัง", "ชื่อผู้รับ" or "To" on the slip — extract the name next to that label only. Do NOT use the sender name or account owner name.\n\n` +
+          `- recipient: the merchant, service, or company that received the payment. This is usually a company/brand name (e.g. "2c2p(Thailand)", "Grab", "Shopee", "Netflix"). It is NOT a Thai person name (นาย/นาง/นางสาว), NOT a bank name (กรุงไทย/กสิกร/SCB), and NOT a number. If you see a company or brand name on the slip, that is the recipient. Return "" if none found.\n\n` +
           `Reply ONLY with valid JSON, no other text:\n` +
           `{"date":"YYYY-MM-DD","time":"HH:MM","total":0.00,"recipient":"..."}`
         }
