@@ -113,7 +113,8 @@ async function callClaude(imageBase64, mimeType, description) {
         { type: 'text', text:
           `Analyze this Thai receipt or bank slip image.\n\n` +
           `Find ONLY these 4 things:\n` +
-          `- date: the transaction date, convert Buddhist Era to Gregorian (e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
+          `- date: the transaction date, convert Buddhist Era to Gregorian (minus 543, e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
+          `  Thai month abbreviations: ม.ค.=01, ก.พ.=02, มี.ค.=03, เม.ย.=04, พ.ค.=05, มิ.ย.=06, ก.ค.=07, ส.ค.=08, ก.ย.=09, ต.ค.=10, พ.ย.=11, ธ.ค.=12\n` +
           `- time: the transaction time in HH:MM format (24hr), or "" if not visible\n` +
           `- total: the final total amount as a number only (e.g. 45.00)\n` +
           `- recipient: the merchant, service, or company that received the payment. This is usually a company/brand name (e.g. "2c2p(Thailand)", "Grab", "Shopee", "Netflix"). It is NOT a Thai person name (นาย/นาง/นางสาว), NOT a bank name (กรุงไทย/กสิกร/SCB), and NOT a number. If you see a company or brand name on the slip, that is the recipient. Return "" if none found.\n\n` +
