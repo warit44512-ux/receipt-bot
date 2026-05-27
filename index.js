@@ -90,7 +90,7 @@ async function processReceipt(userId, imageMessageId, description) {
 
     // 4. Tell the user it worked
     await push(userId,
-      `✅ Saved!\n\nDescription: ${description}\nDate: ${data.date}\nTotal: ${data.total}`
+      `✅ Saved!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ${data.total}\nRecipient: ${data.recipient || '-'}`
     );
 
   } catch (err) {
@@ -112,11 +112,13 @@ async function callClaude(imageBase64, mimeType, description) {
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
           `Analyze this Thai receipt or bank slip image.\n\n` +
-          `Find ONLY these 2 things:\n` +
+          `Find ONLY these 4 things:\n` +
           `- date: the transaction date, convert Buddhist Era to Gregorian (e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
-          `- total: the final total amount as a number only (e.g. 45.00)\n\n` +
+          `- time: the transaction time in HH:MM format (24hr), or "" if not visible\n` +
+          `- total: the final total amount as a number only (e.g. 45.00)\n` +
+          `- recipient: the name of the person or place that received the money, or "" if not visible\n\n` +
           `Reply ONLY with valid JSON, no other text:\n` +
-          `{"date":"YYYY-MM-DD","total":0.00}`
+          `{"date":"YYYY-MM-DD","time":"HH:MM","total":0.00,"recipient":"..."}`
         }
       ]
     }]
@@ -125,24 +127,37 @@ async function callClaude(imageBase64, mimeType, description) {
   const text  = msg.content[0].text;
   const match = text.match(/\{[\s\S]*\}/);
   if (match) return JSON.parse(match[0]);
-  return { date: today(), total: 0 };
+  return { date: today(), time: '', total: 0, recipient: '' };
 }
 
 // ── Google Sheets ─────────────────────────────────────────────
 async function saveToSheet(userId, description, data) {
   if (!sheets) throw new Error('Google Sheets not configured');
 
-  const check = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'A1' });
-  if (!check.data.values) {
+  // Get month tab name e.g. "2026-05"
+  const month = (data.date || today()).substring(0, 7);
+
+  // Get existing sheets
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID });
+  const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
+
+  // Create the tab if it doesn't exist
+  if (!existingSheets.includes(month)) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SHEET_ID,
+      requestBody: { requests: [{ addSheet: { properties: { title: month } } }] }
+    });
+    // Add header row to new tab
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
-      requestBody: { values: [['Description','Date','Total']] }
+      spreadsheetId: SHEET_ID, range: `${month}!A1`, valueInputOption: 'RAW',
+      requestBody: { values: [['Description', 'Date', 'Time', 'Total', 'Recipient']] }
     });
   }
 
+  // Append data to the month tab
   await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID, range: 'A1', valueInputOption: 'RAW',
-    requestBody: { values: [[description, data.date || '', data.total || 0]] }
+    spreadsheetId: SHEET_ID, range: `${month}!A1`, valueInputOption: 'RAW',
+    requestBody: { values: [[description, data.date || '', data.time || '', data.total || 0, data.recipient || '']] }
   });
 }
 
