@@ -111,9 +111,14 @@ async function callClaude(imageBase64, mimeType, description) {
       content: [
         { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         { type: 'text', text:
-          `Analyze this receipt. The user says it is for: "${description}".\n` +
-          `Extract: date, total amount, currency, and a brief item summary (do NOT include the store name anywhere).\n` +
-          `Reply ONLY with JSON: {"date":"YYYY-MM-DD","total":0.00,"currency":"THB","items":"..."}`
+          `Analyze this Thai receipt or bank slip image. The user says it is for: "${description}".\n\n` +
+          `Extract these fields carefully:\n` +
+          `- date: the transaction date only (convert Buddhist Era to Gregorian, e.g. 2569 → 2026), format as YYYY-MM-DD\n` +
+          `- total: the transaction amount as a number only (e.g. 45.00), NOT a date\n` +
+          `- currency: the currency code (usually THB)\n` +
+          `- items: one sentence describing the transaction type (e.g. "ATM withdrawal", "bank transfer", "grocery purchase")\n\n` +
+          `Reply ONLY with valid JSON, no other text:\n` +
+          `{"date":"YYYY-MM-DD","total":0.00,"currency":"THB","items":"..."}`
         }
       ]
     }]
