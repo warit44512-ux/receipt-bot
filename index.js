@@ -46,6 +46,20 @@ app.get('/weekly-trigger', async (req, res) => {
   }
 });
 
+// ── Daily ELI5 trigger (called by external cron) ─────────────
+app.get('/daily-eli5', async (req, res) => {
+  res.send('Daily ELI5 triggered');
+  try {
+    const eli5 = await generateELI5();
+    const userIds = await getAllUserIds();
+    for (const userId of userIds) {
+      await push(userId, eli5);
+    }
+  } catch (err) {
+    console.error('Daily ELI5 error:', err.message);
+  }
+});
+
 // ── LINE webhook ──────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
@@ -350,6 +364,61 @@ async function generateSummary(sheetId, period = 'month') {
   } catch (err) {
     return '📊 Could not generate summary. Make sure you have receipts saved.';
   }
+}
+
+// ── ELI5 generator ───────────────────────────────────────────
+const ELI5_TOPICS = [
+  'How does Wi-Fi work?',
+  'What are black holes?',
+  'How does soap clean things?',
+  'Why do we dream?',
+  'How do planes stay up in the air?',
+  'Why is the sky blue?',
+  'How does electricity work?',
+  'What is DNA?',
+  'How do magnets work?',
+  'Why do we have seasons?',
+  'How does the internet work?',
+  'What causes thunder and lightning?',
+  'How do our eyes see color?',
+  'Why does ice float on water?',
+  'How do vaccines work?',
+  'What is gravity?',
+  'How do computers think?',
+  'Why do onions make you cry?',
+  'What causes rainbows?',
+  'How do batteries store energy?',
+  'Why do stars twinkle?',
+  'How does GPS know where you are?',
+  'What is blockchain?',
+  'How do airplanes know where to go?',
+  'Why does the moon change shape?',
+  'How does your stomach digest food?',
+  'What is AI and how does it learn?',
+  'Why do we get hiccups?',
+  'How do touchscreens work?',
+  'What causes earthquakes?',
+];
+
+async function generateELI5() {
+  const topic = ELI5_TOPICS[Math.floor(Math.random() * ELI5_TOPICS.length)];
+  const client = new Anthropic({ apiKey: CLAUDE_KEY });
+  const msg = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content:
+        `Explain this topic like I'm 5 years old: "${topic}"\n\n` +
+        `Rules:\n` +
+        `- Use simple analogies a child would understand\n` +
+        `- Keep it fun and use 1-2 emojis max\n` +
+        `- Total length under 500 characters (this is for a LINE chat message)\n` +
+        `- Start with the topic as a header like: 🧒 ELI5: ${topic}\n` +
+        `- End with a one-line fun fact`
+    }]
+  });
+  return msg.content[0].text;
 }
 
 // ── LINE helpers ──────────────────────────────────────────────
