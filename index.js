@@ -275,8 +275,13 @@ function convertThaiDate(raw) {
 
   const s = String(raw).normalize('NFC').trim();
 
-  // Already ISO format
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // Already ISO format (fix Buddhist Era year if present)
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    let y = parseInt(iso[1]);
+    if (y > 2400) y -= 543;
+    return `${y}-${iso[2]}-${iso[3]}`;
+  }
 
   // Match Thai month: abbreviation (dots optional) OR full name. Order matters.
   const monthPatterns = [
@@ -294,22 +299,36 @@ function convertThaiDate(raw) {
     [/ธ\.?ค\.?|ธันวา/,   '12'],  // December
   ];
 
+  // Helper: BE → Gregorian
+  const fixYear = (y) => (y > 2400 ? y - 543 : y);
+
+  // ── Numeric formats: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY (Thai slips use this) ──
+  const numeric = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if (numeric) {
+    const day   = numeric[1].padStart(2, '0');
+    const mon   = numeric[2].padStart(2, '0');
+    let   year  = parseInt(numeric[3]);
+    if (year < 100) year += (year > 50 ? 1900 : 2000); // 2-digit year
+    year = fixYear(year);
+    return `${year}-${mon}-${day}`;
+  }
+
+  // ── Thai text month formats ──
   let month = null;
   for (const [pattern, num] of monthPatterns) {
     if (pattern.test(s)) { month = num; break; }
   }
-  if (!month) return today();  // couldn't parse — fall back, never store junk
+  if (month) {
+    const dayMatch  = s.match(/\b(\d{1,2})\b/);
+    const yearMatch = s.match(/\b(\d{4})\b/);
+    if (dayMatch && yearMatch) {
+      const day  = dayMatch[1].padStart(2, '0');
+      const year = fixYear(parseInt(yearMatch[1]));
+      return `${year}-${month}-${day}`;
+    }
+  }
 
-  // Day = first 1-2 digit number; Year = 4-digit number
-  const dayMatch  = s.match(/\b(\d{1,2})\b/);
-  const yearMatch = s.match(/\b(\d{4})\b/);
-  if (!dayMatch || !yearMatch) return today();
-
-  const day  = dayMatch[1].padStart(2, '0');
-  let   year = parseInt(yearMatch[1]);
-  if (year > 2400) year -= 543;  // Buddhist Era → Gregorian
-
-  return `${year}-${month}-${day}`;
+  return today();  // couldn't parse — fall back, never store junk
 }
 
 // ── Google Sheets ─────────────────────────────────────────────
