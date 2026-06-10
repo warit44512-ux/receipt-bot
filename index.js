@@ -79,7 +79,7 @@ async function handleEvent(event) {
 
   if (event.message.type === 'image') {
     userStates[userId] = { imageMessageId: event.message.id };
-    await reply(replyToken, '📝 Got your receipt! What\'s this for?\n\n(e.g. "Lunch at cafe" or "Groceries")');
+    await push(userId, '📝 Got your receipt! What\'s this for?\n\n(e.g. "Lunch at cafe" or "Groceries")');
     return;
   }
 
@@ -89,8 +89,8 @@ async function handleEvent(event) {
     // Register command
     if (text.toLowerCase().startsWith('register ')) {
       const sheetId = text.split(' ')[1]?.trim();
-      if (!sheetId) { await reply(replyToken, '❌ Please send: register YOUR_SHEET_ID'); return; }
-      await registerUser(userId, sheetId, replyToken);
+      if (!sheetId) { await push(userId, '❌ Please send: register YOUR_SHEET_ID'); return; }
+      await registerUser(userId, sheetId);
       return;
     }
 
@@ -102,12 +102,12 @@ async function handleEvent(event) {
       const description = parts.slice(2).join(' ');
 
       if (isNaN(amount) || !description) {
-        await reply(replyToken, '❌ Wrong format. Use:\nadd AMOUNT DESCRIPTION\n\nExample:\nadd 500 TrueMoney top-up');
+        await push(userId, '❌ Wrong format. Use:\nadd AMOUNT DESCRIPTION\n\nExample:\nadd 500 TrueMoney top-up');
         return;
       }
 
       const userSheetId = await getUserSheetId(userId);
-      if (!userSheetId) { await reply(replyToken, '❌ Not registered. Type: register YOUR_SHEET_ID'); return; }
+      if (!userSheetId) { await push(userId, '❌ Not registered. Type: register YOUR_SHEET_ID'); return; }
 
       const now = new Date();
       const data = {
@@ -118,15 +118,15 @@ async function handleEvent(event) {
       };
 
       await saveToSheet(userSheetId, description, data);
-      await reply(replyToken, `✅ Added manually!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${amount}`);
+      await push(userId, `✅ Added manually!\n\nDescription: ${description}\nDate: ${data.date} ${data.time}\nTotal: ฿${amount}`);
       return;
     }
 
     // Summary command
     if (text.toLowerCase() === 'summary' || text === 'สรุป') {
       const sheetId = await getUserSheetId(userId);
-      if (!sheetId) { await reply(replyToken, '❌ Not registered yet. Type: register YOUR_SHEET_ID'); return; }
-      await reply(replyToken, '⏳ Generating summary...');
+      if (!sheetId) { await push(userId, '❌ Not registered yet. Type: register YOUR_SHEET_ID'); return; }
+      await push(userId, '⏳ Generating summary...');
       const summary = await generateSummary(sheetId, 'month');
       await push(userId, summary);
       return;
@@ -138,17 +138,17 @@ async function handleEvent(event) {
       const description    = text;
       const imageMessageId = state.imageMessageId;
       delete userStates[userId];
-      await reply(replyToken, '⏳ Reading your receipt...');
+      await push(userId, '⏳ Reading your receipt...');
       await processReceipt(userId, imageMessageId, description);
       return;
     }
 
-    await reply(replyToken, '📸 Send me a receipt photo!\n\nCommands:\n• register SHEET_ID\n• summary / สรุป');
+    await push(userId, '📸 Send me a receipt photo!\n\nCommands:\n• register SHEET_ID\n• summary / สรุป');
   }
 }
 
 // ── Register user ─────────────────────────────────────────────
-async function registerUser(userId, sheetId, replyToken) {
+async function registerUser(userId, sheetId) {
   try {
     const spreadsheet    = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID });
     const existingSheets = spreadsheet.data.sheets.map(s => s.properties.title);
@@ -182,10 +182,10 @@ async function registerUser(userId, sheetId, replyToken) {
         requestBody: { values: [[userId, sheetId]] }
       });
     }
-    await reply(replyToken, '✅ Registered! Send a receipt photo to get started!');
+    await push(userId, '✅ Registered! Send a receipt photo to get started!');
   } catch (err) {
     console.error('registerUser error:', err.message);
-    await reply(replyToken, '❌ Registration failed. Make sure you shared your sheet with:\nreceipt-bot@line-stupid-receipt.iam.gserviceaccount.com');
+    await push(userId, '❌ Registration failed. Make sure you shared your sheet with:\nreceipt-bot@line-stupid-receipt.iam.gserviceaccount.com');
   }
 }
 
