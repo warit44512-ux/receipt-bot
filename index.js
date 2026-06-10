@@ -272,21 +272,44 @@ async function callClaude(imageBase64, mimeType, description) {
 
 function convertThaiDate(raw) {
   if (!raw) return today();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  const months = {
-    'ม.ค.': '01', 'ก.พ.': '02', 'มี.ค.': '03', 'เม.ย.': '04',
-    'พ.ค.': '05', 'มิ.ย.': '06', 'ก.ค.': '07', 'ส.ค.': '08',
-    'ก.ย.': '09', 'ต.ค.': '10', 'พ.ย.': '11', 'ธ.ค.': '12'
-  };
-  for (const [thaiMonth, num] of Object.entries(months)) {
-    if (raw.includes(thaiMonth)) {
-      const parts = raw.replace(thaiMonth, '').trim().split(/\s+/);
-      const day   = parts[0].padStart(2, '0');
-      const year  = parseInt(parts[1]) > 2400 ? parseInt(parts[1]) - 543 : parseInt(parts[1]);
-      return `${year}-${num}-${day}`;
-    }
+
+  const s = String(raw).normalize('NFC').trim();
+
+  // Already ISO format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Match Thai month: abbreviation (dots optional) OR full name. Order matters.
+  const monthPatterns = [
+    [/มี\.?ค\.?|มีนา/,   '03'],  // March  (check before ม.ค.)
+    [/ม\.?ค\.?|มกรา/,    '01'],  // January
+    [/ก\.?พ\.?|กุมภา/,   '02'],  // February
+    [/เม\.?ย\.?|เมษา/,   '04'],  // April
+    [/พฤษภา|พ\.?ค\.?/,   '05'],  // May
+    [/มิ\.?ย\.?|มิถุนา/, '06'],  // June
+    [/ก\.?ค\.?|กรกฎา/,   '07'],  // July
+    [/ส\.?ค\.?|สิงหา/,   '08'],  // August
+    [/ก\.?ย\.?|กันยา/,   '09'],  // September
+    [/ต\.?ค\.?|ตุลา/,    '10'],  // October
+    [/พฤศจิกา|พ\.?ย\.?/, '11'],  // November
+    [/ธ\.?ค\.?|ธันวา/,   '12'],  // December
+  ];
+
+  let month = null;
+  for (const [pattern, num] of monthPatterns) {
+    if (pattern.test(s)) { month = num; break; }
   }
-  return raw;
+  if (!month) return today();  // couldn't parse — fall back, never store junk
+
+  // Day = first 1-2 digit number; Year = 4-digit number
+  const dayMatch  = s.match(/\b(\d{1,2})\b/);
+  const yearMatch = s.match(/\b(\d{4})\b/);
+  if (!dayMatch || !yearMatch) return today();
+
+  const day  = dayMatch[1].padStart(2, '0');
+  let   year = parseInt(yearMatch[1]);
+  if (year > 2400) year -= 543;  // Buddhist Era → Gregorian
+
+  return `${year}-${month}-${day}`;
 }
 
 // ── Google Sheets ─────────────────────────────────────────────
